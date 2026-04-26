@@ -1,0 +1,517 @@
+\documentclass{llncs}
+
+% ── Packages ──────────────────────────────────────────────────────────────────
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,
+            citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+
+% ── Macros for filenames containing % ────────────────────────────────────────
+\begingroup
+\catcode`\%=12\relax
+\gdef\imgLossVAE{lossGraphVAE100%.png}
+\gdef\imgMetrics{analiseMetricas100%.png}
+\endgroup
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+\title{Comparison of Generative Models\texorpdfstring{\\}{ }on the ArtBench-10 Dataset}
+
+\author{Francisco Vieira Monteiro de Queiros\inst{1} \and
+        Tomás Pinto Loureiro\inst{1}}
+
+\authorrunning{F.\,V.\,M. Queiros and T.\,P. Loureiro}
+
+\institute{University of Coimbra, Coimbra, Portugal}
+
+\maketitle
+
+% ══ ABSTRACT ══════════════════════════════════════════════════════════════════
+\begin{abstract}
+This paper presents the implementation and comparative evaluation of three
+generative image model families --- a Variational Autoencoder (VAE), a Deep
+Convolutional Generative Adversarial Network (DCGAN), and a Denoising Diffusion
+Probabilistic Model (DDPM) --- trained on the ArtBench-10 dataset
+($32\times32$ pixels, 10 artistic styles). Models were first developed on a
+20\% data subset and subsequently evaluated on the full 50,000-image training
+set. Quantitative evaluation uses Fr\'echet Inception Distance (FID) and
+Kernel Inception Distance (KID), each reported as mean~$\pm$~standard deviation
+over 10 random seeds with 5,000 generated samples. The DCGAN achieved the best
+results (FID~$=~30.46\pm0.57$; KID~$=~0.0032\pm0.0001$), followed by the DDPM
+(FID~$=~37.91\pm0.37$; KID~$=~0.0062\pm0.0002$) and the VAE
+(FID~$=~140.37\pm0.43$; KID~$=~0.0314\pm0.0004$). We analyse the trade-offs in
+sample quality, diversity, training stability, and computational cost.
+
+\keywords{Generative Models \and VAE \and DCGAN \and DDPM \and ArtBench-10 \and FID \and KID}
+\end{abstract}
+
+% ══ 1. INTRODUCTION ═══════════════════════════════════════════════════════════
+\section{Introduction}
+
+Generative modelling of images has become a central research area, with
+applications ranging from data augmentation to creative content synthesis.
+Three paradigms have emerged as dominant: Variational Autoencoders
+(VAE)~\cite{kingma2013}, Generative Adversarial Networks~\cite{radford2015},
+and Diffusion Models~\cite{ho2020}, each offering distinct trade-offs between
+sample fidelity, diversity, training stability, and inference cost.
+
+Evaluating these models in the artistic domain is particularly challenging
+because artworks exhibit complex textures, high style variability, and require
+both visual realism and stylistic coherence. The ArtBench-10
+dataset~\cite{liao2022} was designed precisely to benchmark generative models
+in this setting, providing a curated, class-balanced collection of artwork
+images across 10 historical styles.
+
+This work addresses the task of learning generative models from artwork images
+and producing new plausible samples that match the data distribution. We build
+a complete generative pipeline --- covering data loading, preprocessing,
+training, sampling, and evaluation --- and compare the three model families
+under a controlled, reproducible protocol. All models were initially developed
+on a 20\% data subset for rapid iteration and then trained on the full dataset
+for final evaluation.
+
+The remainder of this paper is organised as follows:
+Section~\ref{sec:problem} describes the problem and dataset;
+Section~\ref{sec:method} details the three model architectures;
+Section~\ref{sec:setup} describes the experimental setup;
+Section~\ref{sec:results} presents and analyses the results; and
+Section~\ref{sec:conclusion} concludes the paper.
+
+% ══ 2. PROBLEM DESCRIPTION ════════════════════════════════════════════════════
+\section{Problem Description}
+\label{sec:problem}
+
+The goal of this project is image generation, not classification. Given a
+dataset of artwork images, a generative model must learn the underlying data
+distribution and produce new samples that are visually plausible and
+statistically consistent with the training data.
+
+\subsection*{Dataset: ArtBench-10}
+
+ArtBench-10~\cite{liao2022} is a curated benchmark dataset for generative
+modelling in the visual arts domain. It contains paintings grouped by artistic
+style, specifically designed to evaluate models such as VAEs, GANs, and
+diffusion models on structured artistic data. Its main characteristics are:
+
+\begin{itemize}
+  \item \textbf{Classes:} 10 artistic styles --- \textit{Art Nouveau},
+        \textit{Baroque}, \textit{Expressionism}, \textit{Impressionism},
+        \textit{Post-Impressionism}, \textit{Realism}, \textit{Renaissance},
+        \textit{Romanticism}, \textit{Surrealism}, and \textit{Ukiyo-e}.
+  \item \textbf{Size:} 50,000 training images and 10,000 test images
+        (5,000/1,000 per class --- balanced).
+  \item \textbf{Resolution:} $32\times32$ RGB.
+\end{itemize}
+
+This setting is challenging because models must simultaneously balance visual
+fidelity, sample diversity, and style consistency. Unlike discriminative tasks,
+quality must be assessed both qualitatively (sample inspection) and
+quantitatively (distribution-level metrics).
+
+\subsection*{Development Protocol}
+
+Following the prescribed protocol, models were initially trained and tuned on a
+provided \textbf{20\% data subset} (10,000 images) to allow fast iteration over
+architectures and hyperparameters. All three model families were then retrained
+on the \textbf{full training set} (50,000 images) for the final evaluation,
+going beyond the minimum requirement of retraining only the best-performing
+model.
+
+% ══ 3. METHODOLOGY ════════════════════════════════════════════════════════════
+\section{Methodology}
+\label{sec:method}
+
+\subsection{Variational Autoencoder (VAE)}
+
+The VAE~\cite{kingma2013} learns a latent representation of the data by
+maximising the Evidence Lower BOund (ELBO):
+\begin{equation}
+  \mathcal{L}(\theta,\phi;\,x) =
+    \mathbb{E}_{q_\phi(z|x)}\!\left[\log p_\theta(x|z)\right]
+    - D_{\mathrm{KL}}\!\left(q_\phi(z|x)\,\|\,\mathcal{N}(0,I)\right),
+\end{equation}
+where the encoder $q_\phi(z|x)=\mathcal{N}(\mu_\phi,\sigma^2_\phi I)$ maps
+inputs to a Gaussian posterior and the decoder $p_\theta(x|z)$ reconstructs
+the input. Sampling is enabled by the reparameterisation trick
+$z=\mu+\sigma\odot\varepsilon$, $\varepsilon\sim\mathcal{N}(0,I)$.
+
+We use a $\beta$-VAE formulation with $\beta=0.5$ to weight reconstruction
+more heavily than regularisation:
+$\mathcal{L}_\beta = \mathcal{L}_{\mathrm{recon}} - \beta\,D_{\mathrm{KL}}$.
+
+\textbf{Architecture.}
+\textit{Encoder:} three strided conv.\ blocks
+($3\to64\to128\to256$ channels, stride~2, BatchNorm, LeakyReLU~0.2),
+then linear heads to $\mu,\log\sigma^2\in\mathbb{R}^{128}$.
+\textit{Decoder:} three transposed-conv.\ blocks
+($256\to128\to64\to3$, BatchNorm, ReLU, Sigmoid).
+
+\subsection{Deep Convolutional GAN (DCGAN)}
+
+GANs~\cite{radford2015} train a generator $G$ and discriminator $D$ via a
+minimax objective:
+\begin{equation}
+  \min_G\max_D\;
+  \mathbb{E}_{x\sim p_{\text{data}}}\!\left[\log D(x)\right]
+  +\mathbb{E}_{z\sim p_z}\!\left[\log(1-D(G(z)))\right].
+\end{equation}
+In practice the generator maximises $\mathbb{E}_z[\log D(G(z))]$ to avoid
+gradient saturation. DCGAN~\cite{radford2015} stabilises training via strided
+convolutions (no pooling), BatchNorm, and LeakyReLU in the discriminator.
+
+\textbf{Architecture.} The generator maps
+$z\in\mathbb{R}^{100}$ through four transposed-convolutional blocks
+($512{\times}4{\times}4 \to 256 \to 128 \to 3{\times}32{\times}32$, Tanh
+output). The discriminator applies four strided convolutions
+($3 \to 64 \to 128 \to 256 \to 1$, Sigmoid output, LeakyReLU~0.2).
+Weights are initialised as $\mathcal{N}(0,0.02)$. Label smoothing sets
+real labels to 0.9 to prevent discriminator overconfidence.
+
+\subsection{Denoising Diffusion Probabilistic Model (DDPM)}
+
+DDPMs~\cite{ho2020} define a Markov forward process that adds Gaussian noise
+over $T$ steps:
+\begin{equation}
+  q(x_t|x_0) = \mathcal{N}\!\left(\sqrt{\bar\alpha_t}\,x_0,\;
+  (1-\bar\alpha_t)I\right),\quad
+  \bar\alpha_t=\textstyle\prod_{s=1}^{t}(1-\beta_s),
+\end{equation}
+and learn a neural network $\epsilon_\theta$ to reverse this process via:
+\begin{equation}
+  \mathcal{L} = \mathbb{E}_{t,x_0,\epsilon}\!\left[
+    \bigl\|\epsilon - \epsilon_\theta\!\left(
+      \sqrt{\bar\alpha_t}\,x_0+\sqrt{1{-}\bar\alpha_t}\,\epsilon,\,t
+    \right)\bigr\|^2\right].
+\end{equation}
+Recent work~\cite{dhariwal2021} has shown that diffusion models can surpass
+GANs in image quality at high resolutions. For efficient inference we apply
+DDIM sampling~\cite{dhariwal2021} with 100 steps instead of the 1,000 training
+steps, reducing generation time by a factor of~10.
+
+\textbf{Architecture.} A U-Net with 29.60~M parameters operates at three
+resolution levels ($32{\to}16{\to}8$ pixels). Each level contains two ResBlocks
+(GroupNorm, SiLU, Conv2d $3{\times}3$, Dropout~0.1, residual connection).
+4-head self-attention is applied at the $16{\times}16$ and $8{\times}8$ levels.
+Timestep $t$ is encoded via a sinusoidal positional embedding followed by a
+two-layer MLP and injected into every ResBlock via a linear projection.
+An Exponential Moving Average (EMA, decay~$=0.9995$) of the weights is
+maintained and used exclusively during sampling.
+
+% ══ 4. EXPERIMENTAL SETUP ════════════════════════════════════════════════════
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Data Preprocessing}
+
+All images are resized and centre-cropped to $32\times32$ pixels. The VAE
+normalises pixel values to $[0,1]$ (compatible with its Sigmoid output); the
+DCGAN and DDPM normalise to $[-1,1]$ (Tanh and standard normalisation,
+respectively). The DDPM additionally applies random cropping with a 4-pixel
+margin, random horizontal flipping ($p=0.5$), and mild colour jitter
+(brightness/contrast/saturation~$\pm5\%$, hue~$\pm2\%$) for data augmentation.
+
+\subsection{Training Configuration}
+
+Table~\ref{tab:hyperparams} summarises the main hyperparameters. All
+experiments used a fixed random seed (42) for reproducibility. Training was
+performed on a single NVIDIA GPU with CUDA support.
+
+\begin{table}[t]
+\centering
+\caption{Training hyperparameters for each model (full dataset).}
+\label{tab:hyperparams}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Hyperparameter} & \textbf{VAE} & \textbf{DCGAN} & \textbf{DDPM} \\
+\midrule
+Epochs              & 100   & 200    & 500 \\
+Batch size          & 64    & 64     & 128 \\
+Optimiser           & Adam  & Adam   & AdamW \\
+Learning rate       & $10^{-3}$ & $2{\times}10^{-4}$ & $2{\times}10^{-4}$ \\
+Adam $\beta_1$      & 0.9   & 0.5    & 0.9 \\
+Latent / noise dim  & 128   & 100    & --- \\
+Noise steps $T$     & ---   & ---    & 1000 \\
+LR schedule         & None  & None   & Warmup + cosine \\
+EMA decay           & ---   & ---    & 0.9995 \\
+Total grad.\ steps  & $\sim$78k & $\sim$156k & $\sim$195k \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Computational Resources}
+
+Table~\ref{tab:compute} summarises model sizes and training costs.
+The VAE and DCGAN are lightweight: a single forward pass suffices to
+generate one sample. The DDPM is $7\times$ larger and requires 100
+denoising steps per image even with DDIM acceleration.
+
+\begin{table}[t]
+\centering
+\caption{Model size and inference cost.}
+\label{tab:compute}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Model} & \textbf{Parameters} & \textbf{Grad.\ steps} & \textbf{Inference passes} \\
+\midrule
+VAE   & $\sim$2.9\,M & $\sim$78k  & 1 \\
+DCGAN & $\sim$4.1\,M (G+D) & $\sim$156k & 1 \\
+DDPM  & 29.60\,M & $\sim$195k & 100 (DDIM) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Evaluation Protocol}
+
+The evaluation protocol follows the assignment specification exactly:
+
+\begin{itemize}
+  \item \textbf{Samples:} 5,000 images generated by each model and 5,000 real
+        images drawn from the test set.
+  \item \textbf{FID:} computed on the full 5,000-sample sets using
+        InceptionV3 features (2,048-dimensional, fc replaced by
+        \texttt{Identity}).
+  \item \textbf{KID:} computed as the mean MMD$^2$ over 50 random subsets of
+        size~100 drawn from the generated and real feature sets; both the mean
+        and standard deviation are reported per run.
+  \item \textbf{Statistical robustness:} the full protocol is repeated for
+        10 different random seeds (42--51). Final results are reported as
+        mean~$\pm$~standard deviation of FID and mean~$\pm$~standard
+        deviation of KID across the 10 runs.
+  \item \textbf{Fairness:} preprocessing, sample count, and evaluation code
+        path are identical for all models. DDIM sampling (100 steps) is used
+        for the DDPM.
+\end{itemize}
+
+% ══ 5. RESULTS AND ANALYSIS ═══════════════════════════════════════════════════
+\section{Results and Analysis}
+\label{sec:results}
+
+\subsection{Qualitative Analysis}
+
+Figure~\ref{fig:samples} shows 64 samples generated by each model after
+training on the full dataset.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.325\textwidth]{amostras_vae_full.png}\hfill
+  \includegraphics[width=0.325\textwidth]{amostras_gan_full.png}\hfill
+  \includegraphics[width=0.325\textwidth]{amostras_diffusion_full.png}
+  \caption{64 generated samples (full dataset, $32\times32$ px).
+           Left:~VAE. Centre:~DCGAN. Right:~DDPM.}
+  \label{fig:samples}
+\end{figure}
+
+The VAE produces noticeably blurry images, a direct consequence of the
+pixel-wise BCE reconstruction loss which averages over plausible outputs.
+The DCGAN generates sharper, more detailed images but shows some
+repetition of motifs, suggesting mild mode dropping. The DDPM produces the
+most varied outputs, covering a wider range of styles and colour palettes,
+reflecting the richer probabilistic formulation of the reverse diffusion
+process.
+
+The VAE training curves (Figure~\ref{fig:vaeloss}) confirm stable
+convergence: the total loss decreased from~${\approx}1840$ to~${\approx}1780$
+over 100 epochs, with the KL term stabilising at~${\approx}65$, indicating a
+well-formed latent space.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{\imgLossVAE}
+  \caption{VAE training curves: total loss (left), reconstruction BCE (centre),
+           and KL divergence (right) over 100 epochs.}
+  \label{fig:vaeloss}
+\end{figure}
+
+\subsection{Quantitative Analysis}
+
+Table~\ref{tab:results} reports the main quantitative results.
+
+\begin{table}[t]
+\centering
+\caption{FID and KID (mean~$\pm$~std over 10 seeds, full dataset).
+         Bold indicates best value.}
+\label{tab:results}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Model} & \textbf{FID} ($\downarrow$) & \textbf{KID} ($\downarrow$) \\
+\midrule
+VAE   & $140.37 \pm 0.43$ & $0.0314 \pm 0.0004$ \\
+DCGAN & $\mathbf{30.46 \pm 0.57}$ & $\mathbf{0.0032 \pm 0.0001}$ \\
+DDPM  & $37.91  \pm 0.37$ & $0.0062 \pm 0.0002$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figure~\ref{fig:metrics} visualises these results; Table~\ref{tab:seeds}
+provides the full per-seed breakdown.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{\imgMetrics}
+  \caption{FID (left) and KID (right) for the three models. Error bars
+           represent one standard deviation over 10 seeds.}
+  \label{fig:metrics}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Per-seed FID and KID for all models (full dataset, seeds 42--51).}
+\label{tab:seeds}
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{c rrr rrr}
+\toprule
+& \multicolumn{3}{c}{\textbf{FID}} & \multicolumn{3}{c}{\textbf{KID}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+\textbf{Seed} & VAE & DCGAN & DDPM & VAE & DCGAN & DDPM \\
+\midrule
+42 & 140.66 & 31.10 & 37.91 & 0.0315 & 0.0032 & 0.0061 \\
+43 & 140.34 & 29.56 & 38.35 & 0.0315 & 0.0033 & 0.0065 \\
+44 & 139.59 & 29.91 & 37.63 & 0.0311 & 0.0031 & 0.0063 \\
+45 & 140.29 & 30.29 & 37.88 & 0.0315 & 0.0032 & 0.0063 \\
+46 & 140.34 & 30.23 & 38.05 & 0.0306 & 0.0032 & 0.0063 \\
+47 & 141.28 & 31.35 & 37.39 & 0.0321 & 0.0033 & 0.0059 \\
+48 & 140.76 & 30.87 & 38.29 & 0.0315 & 0.0034 & 0.0063 \\
+49 & 140.07 & 30.70 & 37.20 & 0.0314 & 0.0032 & 0.0060 \\
+50 & 140.26 & 29.73 & 38.04 & 0.0319 & 0.0030 & 0.0062 \\
+51 & 140.08 & 30.82 & 38.33 & 0.0311 & 0.0032 & 0.0062 \\
+\midrule
+\textbf{Mean} & 140.37 & 30.46 & 37.91 & 0.0314 & 0.0032 & 0.0062 \\
+\textbf{Std}  & 0.43   & 0.57  & 0.37  & 0.0004 & 0.0001 & 0.0002 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{VAE.} The high FID ($140.37$) reflects the known limitation of
+pixel-wise reconstruction losses: minimising the average reconstruction error
+encourages blurry outputs, since the mean of multiple plausible sharp images
+is itself blurry. The regularised latent space supports smooth interpolation
+but does not enforce perceptual sharpness.
+
+\textbf{DCGAN.} The adversarial objective directly minimises the perceptual
+distance between real and generated distributions, explaining the strong FID
+($30.46$) and KID ($0.0032$). At $32\times32$ resolution the discriminator's
+capacity is sufficient to model the full feature space. The slightly larger FID
+variance ($\pm0.57$) reflects the inherent stochasticity of the GAN training
+dynamic. Mode dropping is visible qualitatively but not captured by FID/KID.
+
+\textbf{DDPM.} The DDPM ranks between DCGAN and VAE (FID~$37.91$). Its lower
+FID variance ($\pm0.37$) indicates more stable generation. The DDIM
+approximation (100 vs.\ 1,000 steps) likely accounts for part of the gap with
+DCGAN, as fewer denoising steps may not fully capture the learned distribution.
+At higher resolutions diffusion models typically surpass GANs~\cite{dhariwal2021};
+at $32\times32$ the DCGAN's simpler objective is sufficient to achieve better
+distribution matching.
+
+The very low standard deviations across all models and metrics confirm that
+10 seeds with 5,000 samples provide statistically robust estimates, in line
+with the evaluation protocol.
+
+\subsection{Development Subset vs.\ Full Dataset}
+
+\begin{table}[H]
+\centering
+\caption{FID and KID on the 20\% development subset (seeds 42--51).}
+\label{tab:subset}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Model} & \textbf{FID} ($\downarrow$) & \textbf{KID} ($\downarrow$) \\
+\midrule
+VAE   & $142.72 \pm 0.64$ & $0.0305 \pm 0.0004$ \\
+DCGAN & $47.38  \pm 0.65$ & $0.0066 \pm 0.0001$ \\
+DDPM  & $45.91  \pm 0.48$ & $0.0078 \pm 0.0002$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:subset} shows the same evaluation protocol on the 20\% subset
+(10,000 images) used during development.
+On the subset, DDPM and DCGAN performed similarly in FID ($45.91$
+vs.\ $47.38$), with DCGAN leading on KID. After retraining on the full
+50,000-image dataset, DCGAN's advantage became substantially larger
+(FID $30.46$ vs.\ $37.91$), indicating that the adversarial objective
+benefits more from additional data at this resolution. The VAE remained
+the weakest model in both settings.
+
+% ══ 6. CONCLUSION ═════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+
+We implemented and compared three generative model families --- VAE, DCGAN,
+and DDPM --- on the ArtBench-10 dataset at $32\times32$ resolution under a
+rigorous, reproducible evaluation protocol. The DCGAN achieved the best
+quantitative results on both FID and KID, benefiting from its adversarial
+objective and the modest resolution of the task. The DDPM ranked second,
+offering superior sample diversity at the cost of a slightly higher FID,
+partly attributable to accelerated DDIM sampling. The VAE ranked last due to
+the blurriness induced by pixel-wise reconstruction loss.
+
+These results highlight a key trade-off: adversarial models excel at
+distribution matching at low resolution, while diffusion models provide richer
+diversity and are expected to scale better to higher resolutions~\cite{rombach2022}.
+Future work includes evaluating DDPM with full 1,000-step sampling, training
+class-conditional models, and extending to $64\times64$ or higher resolutions.
+
+\smallskip\noindent\textbf{Use of Generative AI Tools.}
+Claude (Anthropic) was used as a code assistant during the development of this
+project, specifically to help structure training loops, debug PyTorch code, and
+draft parts of this report. All model implementations, experimental results,
+and conclusions were verified and are the sole responsibility of the authors.
+
+% ══ REFERENCES ════════════════════════════════════════════════════════════════
+\begin{thebibliography}{10}
+
+\bibitem{dhariwal2021}
+Dhariwal, P., Nichol, A.: Diffusion models beat GANs on image synthesis.
+In: Advances in Neural Information Processing Systems (NeurIPS) (2021)
+
+\bibitem{gulrajani2017}
+Gulrajani, I., Ahmed, F., Arjovsky, M., Dumoulin, V., Courville, A.C.:
+Improved training of Wasserstein GANs.
+In: Advances in Neural Information Processing Systems (NeurIPS) (2017)
+
+\bibitem{ho2020}
+Ho, J., Jain, A., Abbeel, P.: Denoising diffusion probabilistic models.
+In: Advances in Neural Information Processing Systems (NeurIPS) (2020)
+
+\bibitem{karras2020}
+Karras, T., Aittala, M., Laine, S., H{\"a}rk{\"o}nen, E., Hellsten, J.,
+Lehtinen, J., Aila, T.: Training generative adversarial networks with limited
+data. arXiv preprint arXiv:2006.06676 (2020)
+
+\bibitem{karras2018}
+Karras, T., Laine, S., Aila, T.: A style-based generator architecture for
+generative adversarial networks. arXiv preprint arXiv:1812.04948 (2018)
+
+\bibitem{kingma2013}
+Kingma, D.P., Welling, M.: Auto-encoding variational Bayes.
+arXiv preprint arXiv:1312.6114 (2013)
+
+\bibitem{liao2022}
+Liao, P., Li, X., Liu, X., Keutzer, K.: The ArtBench dataset: Benchmarking
+generative models with artworks. arXiv preprint arXiv:2206.11404 (2022)
+
+\bibitem{radford2015}
+Radford, A., Metz, L., Chintala, S.: Unsupervised representation learning with
+deep convolutional generative adversarial networks.
+arXiv preprint arXiv:1511.06434 (2015)
+
+\bibitem{rombach2022}
+Rombach, R., Blattmann, A., Lorenz, D., Esser, P., Ommer, B.:
+High-resolution image synthesis with latent diffusion models.
+In: IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) (2022)
+
+\bibitem{sohn2015}
+Sohn, K., Lee, H., Yan, X.: Learning structured output representation using
+deep conditional generative models.
+arXiv preprint arXiv:1506.05517 (2015)
+
+\end{thebibliography}
+
+\end{document}
